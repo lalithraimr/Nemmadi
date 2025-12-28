@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Admins collection (create manually for admin UIDs)
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Minimal user profile — only user can create/read/update their own profile
+    match /users/{userId} {
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow read, update, delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Screening results — immutable once created
+    match /screening_results/{docId} {
+      allow create: if isSignedIn()
+                    && request.resource.data.userId == request.auth.uid
+                    && validScreeningData(request.resource.data);
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if false;
+    }
+
+    // Telemetry (trial-level events) — allow create from authenticated clients;
+    // reads allowed only to admins to support dashboards.
+    match /telemetry/{docId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Aggregates — only Cloud Functions / admins should write; this collection stores aggregated anonymized stats
+    match /aggregates/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Validation helper: ensure required fields exist and types are sensible
+    function validScreeningData(data) {
+      return data.keys().hasAll(['userId','createdAt','wellnessScore','subscores'])
+             && data.userId is string
+             && data.wellnessScore is number
+             && data.subscores is map;
+    }
+  }
+}
